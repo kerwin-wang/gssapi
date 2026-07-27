@@ -161,7 +161,12 @@ func (lib *Lib) NewCtxId() *CtxId {
 // InitSecContext initiates a security context. Usually invoked by the client.
 // A Context (CtxId) describes the state at one end of an authentication
 // protocol. May return ErrContinueNeeded if the client is to make another
-// iteration of exchanging token with the service
+// iteration of exchanging token with the service.
+//
+// If GSSAPI returns an error after producing a context or output token, those
+// values are returned together with the error. The caller owns all non-nil
+// returned values and must Release them. This is required because some GSSAPI
+// mechanisms allocate a partial context or error token even on failure.
 func (lib *Lib) InitSecContext(initiatorCredHandle *CredId, ctxIn *CtxId,
 	targetName *Name, mechType *OID, reqFlags uint32, timeReq time.Duration,
 	inputChanBindings ChannelBindings, inputToken *Buffer) (
@@ -222,7 +227,13 @@ func (lib *Lib) InitSecContext(initiatorCredHandle *CredId, ctxIn *CtxId,
 
 	err = lib.stashLastStatus(maj, min)
 	if err != nil {
-		return nil, nil, nil, 0, 0, err
+		// GSSAPI is allowed to produce a partial context and/or an error token
+		// on failure. Returning nil here used to discard the only Go wrappers
+		// that can release those native allocations. Return every output and
+		// let the caller release the non-nil values.
+		return ctxOut, actualMechType, outputToken,
+			uint32(flags), time.Duration(timerec) * time.Second,
+			err
 	}
 
 	if MajorStatus(maj).ContinueNeeded() {
